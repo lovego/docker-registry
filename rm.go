@@ -84,26 +84,9 @@ func rmRepository(reg *registry.Registry, name string, width int) error {
 }
 
 func rmImage(reg *registry.Registry, name, tag string) error {
-	digest2tags, err := getDigest2TagsMap(reg, name)
+	digest, err := getManifestV2Digest(reg, name, tag)
 	if err != nil {
 		return err
-	}
-	fmt.Println(digest2tags)
-	digest, hasOtherTags := getDigest(digest2tags, tag)
-
-	if hasOtherTags {
-		// put empty manifest to the tag to delete only the tag, not the underline image.
-		if err := reg.PutManifest(name, tag, schema2.DeserializedManifest{}); err != nil {
-			return err
-		}
-		newDigest, err := reg.ManifestDigest(name, tag)
-		if err != nil {
-			return err
-		}
-		if newDigest == digest {
-			return errors.New("newDigest = digest ")
-		}
-		digest = newDigest
 	}
 	if err := reg.DeleteManifest(name, digest); err != nil {
 		return err
