@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"strings"
@@ -14,15 +15,21 @@ import (
 )
 
 func lsCmd() *cobra.Command {
-	var long bool
+	var onlyTags bool
 	cmd := &cobra.Command{
-		Use:   `ls <repository>`,
+		Use:   `ls REPOSITORY`,
 		Short: `List repositories or images in the registry.`,
-		Long: `If repository is privided, all images of the repository is listed,
-otherwise all repositories of the registry is listed.`,
-		Example: `ls registry.example.com/my/repo`,
+		Example: strings.TrimPrefix(`
+  docker-registry ls registry.example.com                # list all repositories of the registry
+  docker-registry ls registry.example.com/my/repo        # list all images       of the repository
+  docker-registry ls registry.example.com/my/repo:my-tag # list one image        of the repository`,
+			"\n"),
 		RunE: func(c *cobra.Command, args []string) error {
-			reg, name, err := getRegistryAndName(args)
+			if len(args) != 1 || args[0] == `` {
+				return errors.New(`one and only one REPOSITORY argument is required.`)
+			}
+			server, name := splitServerAndName(args[0])
+			reg, err := getRegistry(server)
 			if err != nil {
 				return err
 			}
@@ -34,19 +41,26 @@ otherwise all repositories of the registry is listed.`,
 				fmt.Println(strings.Join(repositories, "\n"))
 				return nil
 			}
-			return lsImages(reg, name, long)
+			return lsImages(reg, name, onlyTags)
 		},
 	}
-	cmd.Flags().BoolVarP(&long, `long`, `l`, false, `use a long listing format`)
+	cmd.Flags().BoolVarP(&onlyTags, `tags`, `t`, false, `list only tags`)
 	return cmd
 }
 
-func lsImages(reg *registry.Registry, name string, long bool) error {
-	tags, err := reg.Tags(name)
-	if err != nil {
-		return err
+func lsImages(reg *registry.Registry, name string, onlyTags bool) error {
+	var tags []string
+	name, tag := splitNameAndTag(name)
+	if tag == `` {
+		if _tags, err := reg.Tags(name); err != nil {
+			return err
+		} else {
+			tags = _tags
+		}
+	} else {
+		tags = []string{tag}
 	}
-	if !long {
+	if onlyTags {
 		fmt.Println(`TAG`)
 		fmt.Println(strings.Join(tags, "\n"))
 		return nil
@@ -55,31 +69,25 @@ func lsImages(reg *registry.Registry, name string, long bool) error {
 }
 
 func lsImagesLong(reg *registry.Registry, name string, tags []string) error {
-	maxLen := 0
-	for _, tag := range tags {
-		if len(tag) > maxLen {
-			maxLen = len(tag)
-		}
-	}
-	if maxLen < 10 {
-		maxLen = 10
-	} else {
-		maxLen += 3
-	}
+	width := getMaxWidth(tags, 5) + 3
 
 	const format1 = `%-*s`
 	const format2 = "%-15s %-10s"
 	const format3 = "%s\n"
 
-	fmt.Printf(format1, maxLen, `TAG`)
+	fmt.Printf(format1, width, `TAG`)
 	fmt.Printf(format2, `IMAGE ID`, `SIZE`)
 	fmt.Printf(format3, `CREATED`)
 
 	for _, tag := range tags {
-		fmt.Printf(format1, maxLen, tag)
+		fmt.Printf(format1, width, tag)
 
 		v, err := reg.ManifestV2(name, tag)
 		if err != nil {
+			if isNotFound(err) {
+				fmt.Println(`*** Not Found ***`)
+				continue
+			}
 			return err
 		}
 		digest := v.Manifest.Config.Digest
